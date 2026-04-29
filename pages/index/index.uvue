@@ -50,7 +50,33 @@
 		<view class="footer-card page-column">
 			<text class="vision-value">当前视力值 {{ currentVisionLabel }}（{{ currentSnellenLabel }}）</text>
 			<text class="vision-meta">当前第 {{ currentRound }} / {{ trialsPerLevel }} 次 · 标准视标高度约 {{ currentSizeMmText }} mm</text>
-			<text class="vision-note">基于 3 米半尺寸 Snellen / Tumbling E 规则估算，逻辑像素按 160dpi 近似换算</text>
+			<text class="vision-note">基于 3 米半尺寸 Snellen / Tumbling E 规则估算，当前尺寸校准系数 {{ calibrationScaleText }}</text>
+		</view>
+
+		<view v-if="isCalibrationVisible" class="calibration-mask page-column">
+			<view class="calibration-panel page-column">
+				<text class="calibration-title">标准尺寸校验</text>
+				<text class="calibration-copy">请拖动滑块，让下方黑色横条的宽度刚好等于 1 厘米。</text>
+				<text class="calibration-copy">建议拿尺子比对；没有尺子时，可用常见刻度卡辅助校准。</text>
+
+				<view class="calibration-preview page-column">
+					<view class="calibration-ruler-box page-column">
+						<view class="calibration-ruler" :style="{ width: calibrationWidthPx + 'px' }"></view>
+					</view>
+					<text class="calibration-width-text">当前横条宽度约 {{ calibrationWidthMmText }} mm</text>
+				</view>
+
+				<slider class="calibration-slider" :value="calibrationWidthPx" :min="30" :max="160" :step="1" :show-value="true" @change="onCalibrationSliderChange"></slider>
+
+				<view class="calibration-actions page-row">
+					<view class="calibration-button calibration-button-light button-row" hover-class="button-hover" @click="closeCalibrationPanel">
+						<text class="calibration-button-text-light">取消</text>
+					</view>
+					<view class="calibration-button calibration-button-dark button-row" hover-class="button-hover" @click="saveCalibration">
+						<text class="calibration-button-text-dark">保存</text>
+					</view>
+				</view>
+			</view>
 		</view>
 	</view>
 </template>
@@ -76,6 +102,8 @@
 	const LOGICAL_DPI = 160
 	const TRIALS_PER_LEVEL = 5
 	const PASS_THRESHOLD = 3
+	const CALIBRATION_STORAGE_KEY = 'vision_test_calibration_scale'
+	const ONE_CENTIMETER_MM = 10
 
 	const eDirections: number[] = [0, 90, 180, 270]
 	const digits: string[] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
@@ -93,6 +121,7 @@
 		{ acuityLabel: '1.0', acuityValue: 1.0, snellenLabel: '6/6' },
 		{ acuityLabel: '1.2', acuityValue: 1.2, snellenLabel: '6/5' },
 	]
+	const baseOneCentimeterPx = Math.round(ONE_CENTIMETER_MM * LOGICAL_DPI / 25.4)
 
 	function buildVisionLevels(): VisionLevel[] {
 		const levels: VisionLevel[] = []
@@ -162,6 +191,9 @@
 	const currentDirection = ref(0)
 	const currentSymbol = ref('8')
 	const currentRound = ref(1)
+	const calibrationScale = ref(1.0)
+	const calibrationWidthPx = ref(baseOneCentimeterPx)
+	const isCalibrationVisible = ref(false)
 
 	let lastDirectionIndex = -1
 	let lastDigitIndex = -1
@@ -172,7 +204,7 @@
 	})
 
 	const currentSizePx = computed((): number => {
-		return currentLevel.value.sizePx
+		return Math.round(currentLevel.value.sizePx * calibrationScale.value)
 	})
 
 	const currentVisionLabel = computed((): string => {
@@ -184,7 +216,7 @@
 	})
 
 	const currentSizeMmText = computed((): string => {
-		return formatOneDecimal(currentLevel.value.sizeMm)
+		return formatOneDecimal(currentLevel.value.sizeMm * calibrationScale.value)
 	})
 
 	const eStrokePx = computed((): number => {
@@ -198,6 +230,25 @@
 	const modeHintText = computed((): string => {
 		return modeHint(currentMode.value)
 	})
+
+	const calibrationScaleText = computed((): string => {
+		return formatOneDecimal(calibrationScale.value)
+	})
+
+	const calibrationWidthMmText = computed((): string => {
+		return formatOneDecimal(calibrationWidthPx.value * 25.4 / LOGICAL_DPI)
+	})
+
+	function loadCalibration(): void {
+		const storedValue = uni.getStorageSync(CALIBRATION_STORAGE_KEY)
+		if (storedValue != null) {
+			const numericValue = storedValue as number
+			if (numericValue > 0) {
+				calibrationScale.value = numericValue
+				calibrationWidthPx.value = Math.round(baseOneCentimeterPx * numericValue)
+			}
+		}
+	}
 
 	function refreshOptotype(): void {
 		if (currentMode.value == 'e') {
@@ -259,17 +310,58 @@
 		})
 	}
 
+	function openCalibrationPanel(): void {
+		isCalibrationVisible.value = true
+		calibrationWidthPx.value = Math.round(baseOneCentimeterPx * calibrationScale.value)
+	}
+
+	function closeCalibrationPanel(): void {
+		isCalibrationVisible.value = false
+		calibrationWidthPx.value = Math.round(baseOneCentimeterPx * calibrationScale.value)
+	}
+
+	function onCalibrationSliderChange(e: UniSliderChangeEvent): void {
+		calibrationWidthPx.value = e.detail.value
+	}
+
+	function saveCalibration(): void {
+		const nextScale = calibrationWidthPx.value / baseOneCentimeterPx
+		calibrationScale.value = nextScale
+		uni.setStorageSync(CALIBRATION_STORAGE_KEY, nextScale)
+		isCalibrationVisible.value = false
+		uni.showToast({
+			title: '已保存尺寸校准',
+			icon: 'none',
+		})
+	}
+
+	function resetCalibration(): void {
+		calibrationScale.value = 1.0
+		calibrationWidthPx.value = baseOneCentimeterPx
+		uni.setStorageSync(CALIBRATION_STORAGE_KEY, 1.0)
+		uni.showToast({
+			title: '已恢复默认尺寸',
+			icon: 'none',
+		})
+	}
+
 	function openModeSettings(): void {
 		uni.showActionSheet({
-			title: '选择测试符号',
-			itemList: ['E 方向', '数字 0 - 9', '动物图标'],
+			title: '设置',
+			itemList: ['使用 E 方向', '使用数字 0 - 9', '使用动物图标', '标准尺寸校验', '恢复默认尺寸'],
 			success: (res) => {
 				if (res.tapIndex == 0) {
 					currentMode.value = 'e'
 				} else if (res.tapIndex == 1) {
 					currentMode.value = 'number'
-				} else {
+				} else if (res.tapIndex == 2) {
 					currentMode.value = 'animal'
+				} else if (res.tapIndex == 3) {
+					openCalibrationPanel()
+					return
+				} else {
+					resetCalibration()
+					return
 				}
 				currentRound.value = 1
 				refreshOptotype()
@@ -278,6 +370,7 @@
 	}
 
 	onLoad(() => {
+		loadCalibration()
 		refreshOptotype()
 	})
 </script>
@@ -519,5 +612,111 @@
 		margin-top: 6px;
 		font-size: 11px;
 		color: rgba(255, 247, 234, 0.68);
+	}
+
+	.calibration-mask {
+		position: absolute;
+		left: 0;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding-left: 20px;
+		padding-right: 20px;
+		background-color: rgba(20, 29, 35, 0.48);
+	}
+
+	.calibration-panel {
+		width: 100%;
+		flex-direction: column;
+		padding-top: 22px;
+		padding-right: 18px;
+		padding-bottom: 22px;
+		padding-left: 18px;
+		border-radius: 24px;
+		background-color: #fffaf2;
+	}
+
+	.calibration-title {
+		font-size: 22px;
+		font-weight: 700;
+		color: #1b2a35;
+	}
+
+	.calibration-copy {
+		margin-top: 8px;
+		font-size: 13px;
+		color: #625849;
+	}
+
+	.calibration-preview {
+		margin-top: 20px;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding-top: 20px;
+		padding-right: 12px;
+		padding-bottom: 20px;
+		padding-left: 12px;
+		border-radius: 18px;
+		background-color: #f1ecdf;
+	}
+
+	.calibration-ruler-box {
+		width: 100%;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.calibration-ruler {
+		height: 14px;
+		background-color: #111111;
+	}
+
+	.calibration-width-text {
+		margin-top: 12px;
+		font-size: 12px;
+		color: #5d5347;
+	}
+
+	.calibration-slider {
+		margin-top: 18px;
+	}
+
+	.calibration-actions {
+		margin-top: 22px;
+		flex-direction: row;
+		justify-content: space-between;
+	}
+
+	.calibration-button {
+		width: 47%;
+		flex-direction: row;
+		padding-top: 12px;
+		padding-bottom: 12px;
+		border-radius: 999px;
+	}
+
+	.calibration-button-light {
+		background-color: #ece5d6;
+	}
+
+	.calibration-button-dark {
+		background-color: #1f3846;
+	}
+
+	.calibration-button-text-light {
+		font-size: 14px;
+		font-weight: 700;
+		color: #51493d;
+	}
+
+	.calibration-button-text-dark {
+		font-size: 14px;
+		font-weight: 700;
+		color: #fff7eb;
 	}
 </style>
