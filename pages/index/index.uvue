@@ -78,6 +78,32 @@
 				</view>
 			</view>
 		</view>
+
+		<view v-if="isCharacterEditorVisible" class="calibration-mask page-column">
+			<view class="calibration-panel page-column">
+				<text class="calibration-title">自定义数字字符</text>
+				<text class="calibration-copy">请输入数字模式允许出现的字符，默认是 0-9。</text>
+				<text class="calibration-copy">支持直接连续输入，例如 0123456789ABC；空格和逗号会自动忽略。</text>
+
+				<view class="character-input-box page-column">
+					<input class="character-input" type="text" :value="characterInputText" :maxlength="-1" placeholder="请输入字符，例如 0123456789" @input="onCharacterInput"></input>
+					<text class="character-preview-label">当前字符集</text>
+					<text class="character-preview-value">{{ activeCharacterText }}</text>
+				</view>
+
+				<view class="calibration-actions page-row">
+					<view class="character-small-button calibration-button-light button-row" hover-class="button-hover" @click="resetCharacterInput">
+						<text class="calibration-button-text-light">恢复默认</text>
+					</view>
+					<view class="character-small-button calibration-button-light button-row" hover-class="button-hover" @click="closeCharacterEditor">
+						<text class="calibration-button-text-light">取消</text>
+					</view>
+					<view class="character-small-button calibration-button-dark button-row" hover-class="button-hover" @click="saveCharacterInput">
+						<text class="calibration-button-text-dark">保存</text>
+					</view>
+				</view>
+			</view>
+		</view>
 	</view>
 </template>
 
@@ -103,10 +129,11 @@
 	const TRIALS_PER_LEVEL = 5
 	const PASS_THRESHOLD = 3
 	const CALIBRATION_STORAGE_KEY = 'vision_test_calibration_scale'
+	const NUMBER_CHAR_STORAGE_KEY = 'vision_test_number_chars'
 	const ONE_CENTIMETER_MM = 10
+	const DEFAULT_NUMBER_CHAR_TEXT = '0123456789'
 
 	const eDirections: number[] = [0, 90, 180, 270]
-	const digits: string[] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 	const animalIcons: string[] = ['🐶', '🐱', '🐰', '🦊', '🐻', '🐼']
 
 	const levelPresets: VisionPreset[] = [
@@ -122,6 +149,10 @@
 		{ acuityLabel: '1.2', acuityValue: 1.2, snellenLabel: '6/5' },
 	]
 	const baseOneCentimeterPx = Math.round(ONE_CENTIMETER_MM * LOGICAL_DPI / 25.4)
+
+	function buildDefaultNumberChars(): string[] {
+		return DEFAULT_NUMBER_CHAR_TEXT.split('')
+	}
 
 	function buildVisionLevels(): VisionLevel[] {
 		const levels: VisionLevel[] = []
@@ -157,25 +188,46 @@
 		return nextIndex
 	}
 
+	function hasCharacter(list: string[], value: string): boolean {
+		for (let i = 0; i < list.length; i++) {
+			if (list[i] == value) {
+				return true
+			}
+		}
+		return false
+	}
+
+	function parseCharacterText(text: string): string[] {
+		const rawList = text.split('')
+		const parsed = [] as string[]
+		for (let i = 0; i < rawList.length; i++) {
+			const item = rawList[i]
+			if (item == ' ' || item == ',' || item == '，' || item == '\n' || item == '\t') {
+				continue
+			}
+			if (!hasCharacter(parsed, item)) {
+				parsed.push(item)
+			}
+		}
+		return parsed
+	}
+
+	function charactersToText(list: string[]): string {
+		let text = ''
+		for (let i = 0; i < list.length; i++) {
+			text += list[i]
+		}
+		return text
+	}
+
 	function modeLabel(mode: TestMode): string {
-		switch (mode) {
+			switch (mode) {
 			case 'e':
 				return 'E 方向'
 			case 'number':
-				return '数字'
+				return '自定义字符'
 			default:
 				return '动物图标'
-		}
-	}
-
-	function modeHint(mode: TestMode): string {
-		switch (mode) {
-			case 'e':
-				return '随机朝向 E 视标，受测者口述上 / 下 / 左 / 右'
-			case 'number':
-				return '随机显示 0 - 9，适合会读数字的受测者'
-			default:
-				return '随机显示动物图标，适合儿童或不识字用户'
 		}
 	}
 
@@ -194,6 +246,9 @@
 	const calibrationScale = ref(1.0)
 	const calibrationWidthPx = ref(baseOneCentimeterPx)
 	const isCalibrationVisible = ref(false)
+	const numberChars = ref(buildDefaultNumberChars() as string[])
+	const characterInputText = ref(DEFAULT_NUMBER_CHAR_TEXT)
+	const isCharacterEditorVisible = ref(false)
 
 	let lastDirectionIndex = -1
 	let lastDigitIndex = -1
@@ -228,7 +283,14 @@
 	})
 
 	const modeHintText = computed((): string => {
-		return modeHint(currentMode.value)
+		switch (currentMode.value) {
+			case 'e':
+				return '随机朝向 E 视标，受测者口述上 / 下 / 左 / 右'
+			case 'number':
+				return '随机显示已配置字符，当前共 ' + numberChars.value.length + ' 个'
+			default:
+				return '随机显示动物图标，适合儿童或不识字用户'
+		}
 	})
 
 	const calibrationScaleText = computed((): string => {
@@ -237,6 +299,10 @@
 
 	const calibrationWidthMmText = computed((): string => {
 		return formatOneDecimal(calibrationWidthPx.value * 25.4 / LOGICAL_DPI)
+	})
+
+	const activeCharacterText = computed((): string => {
+		return charactersToText(numberChars.value)
 	})
 
 	function loadCalibration(): void {
@@ -250,6 +316,22 @@
 		}
 	}
 
+	function loadNumberChars(): void {
+		const storedValue = uni.getStorageSync(NUMBER_CHAR_STORAGE_KEY)
+		if (storedValue != null) {
+			const storedText = storedValue as string
+			const parsed = parseCharacterText(storedText)
+			if (parsed.length > 0) {
+				numberChars.value = parsed
+				characterInputText.value = charactersToText(parsed)
+				return
+			}
+		}
+		const defaults = buildDefaultNumberChars()
+		numberChars.value = defaults
+		characterInputText.value = DEFAULT_NUMBER_CHAR_TEXT
+	}
+
 	function refreshOptotype(): void {
 		if (currentMode.value == 'e') {
 			const directionIndex = pickDifferentIndex(eDirections.length, lastDirectionIndex)
@@ -260,10 +342,10 @@
 		}
 
 		if (currentMode.value == 'number') {
-			const digitIndex = pickDifferentIndex(digits.length, lastDigitIndex)
+			const digitIndex = pickDifferentIndex(numberChars.value.length, lastDigitIndex)
 			lastDigitIndex = digitIndex
 			currentDirection.value = 0
-			currentSymbol.value = digits[digitIndex]
+			currentSymbol.value = numberChars.value[digitIndex]
 			return
 		}
 
@@ -324,6 +406,49 @@
 		calibrationWidthPx.value = e.detail.value
 	}
 
+	function openCharacterEditor(): void {
+		characterInputText.value = charactersToText(numberChars.value)
+		isCharacterEditorVisible.value = true
+	}
+
+	function closeCharacterEditor(): void {
+		isCharacterEditorVisible.value = false
+		characterInputText.value = charactersToText(numberChars.value)
+	}
+
+	function onCharacterInput(e: UniInputEvent): void {
+		characterInputText.value = e.detail.value
+	}
+
+	function resetCharacterInput(): void {
+		characterInputText.value = DEFAULT_NUMBER_CHAR_TEXT
+	}
+
+	function saveCharacterInput(): void {
+		const parsed = parseCharacterText(characterInputText.value)
+		if (parsed.length == 0) {
+			uni.showToast({
+				title: '请至少输入 1 个字符',
+				icon: 'none',
+			})
+			return
+		}
+
+		numberChars.value = parsed
+		characterInputText.value = charactersToText(parsed)
+		uni.setStorageSync(NUMBER_CHAR_STORAGE_KEY, characterInputText.value)
+		lastDigitIndex = -1
+		if (currentMode.value == 'number') {
+			currentRound.value = 1
+			refreshOptotype()
+		}
+		isCharacterEditorVisible.value = false
+		uni.showToast({
+			title: '已保存字符集',
+			icon: 'none',
+		})
+	}
+
 	function saveCalibration(): void {
 		const nextScale = calibrationWidthPx.value / baseOneCentimeterPx
 		calibrationScale.value = nextScale
@@ -348,15 +473,18 @@
 	function openModeSettings(): void {
 		uni.showActionSheet({
 			title: '设置',
-			itemList: ['使用 E 方向', '使用数字 0 - 9', '使用动物图标', '标准尺寸校验', '恢复默认尺寸'],
+			itemList: ['使用 E 方向', '使用自定义字符', '编辑字符集', '使用动物图标', '标准尺寸校验', '恢复默认尺寸'],
 			success: (res) => {
 				if (res.tapIndex == 0) {
 					currentMode.value = 'e'
 				} else if (res.tapIndex == 1) {
 					currentMode.value = 'number'
 				} else if (res.tapIndex == 2) {
-					currentMode.value = 'animal'
+					openCharacterEditor()
+					return
 				} else if (res.tapIndex == 3) {
+					currentMode.value = 'animal'
+				} else if (res.tapIndex == 4) {
 					openCalibrationPanel()
 					return
 				} else {
@@ -371,6 +499,7 @@
 
 	onLoad(() => {
 		loadCalibration()
+		loadNumberChars()
 		refreshOptotype()
 	})
 </script>
@@ -718,5 +847,50 @@
 		font-size: 14px;
 		font-weight: 700;
 		color: #fff7eb;
+	}
+
+	.character-input-box {
+		margin-top: 20px;
+		flex-direction: column;
+		padding-top: 16px;
+		padding-right: 14px;
+		padding-bottom: 16px;
+		padding-left: 14px;
+		border-radius: 18px;
+		background-color: #f1ecdf;
+	}
+
+	.character-input {
+		height: 44px;
+		padding-left: 12px;
+		padding-right: 12px;
+		border-width: 1px;
+		border-style: solid;
+		border-color: #cdbfa8;
+		border-radius: 12px;
+		background-color: #fffdf8;
+		font-size: 16px;
+		color: #1b2a35;
+	}
+
+	.character-preview-label {
+		margin-top: 14px;
+		font-size: 12px;
+		color: #6f6657;
+	}
+
+	.character-preview-value {
+		margin-top: 6px;
+		font-size: 20px;
+		font-weight: 700;
+		color: #1f3846;
+	}
+
+	.character-small-button {
+		width: 31%;
+		flex-direction: row;
+		padding-top: 12px;
+		padding-bottom: 12px;
+		border-radius: 999px;
 	}
 </style>
