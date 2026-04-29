@@ -1,24 +1,523 @@
 <template>
-	<view>
-		<image class="logo" src="/static/logo.png"></image>
-		<text class="title">{{title}}</text>
+	<view class="page page-column">
+		<view class="top-shell page-column" :style="{ paddingTop: statusBarHeight + 'px' }">
+			<view class="top-bar page-row">
+				<view class="top-copy page-column">
+					<text class="headline">{{ currentModeLabel }} 视标</text>
+				</view>
+				<view class="setting-button button-row" hover-class="button-hover" @click="openModeSettings">
+					<text class="setting-icon">⚙</text>
+					<text class="setting-text">设置</text>
+				</view>
+			</view>
+
+			<view class="instruction-card page-column">
+				<text class="instruction-line">请站在屏幕前约 {{ testDistanceText }} 米，遮住单眼后开始测试</text>
+				<text class="instruction-subline">同一视力档建议连续测试 {{ trialsPerLevel }} 次，至少识别 {{ passThreshold }} 次再尝试更小一级</text>
+			</view>
+		</view>
+
+		<view class="stage-shell page-column">
+			<view class="tap-zone tap-zone-top page-column" hover-class="zone-hover" @click="increaseLevel">
+				<view class="zone-pill button-row">
+					<text class="zone-pill-icon">＋</text>
+					<text class="zone-pill-text">放大一级</text>
+				</view>
+			</view>
+
+			<view class="symbol-panel page-column"  @click="nextOptotype">
+				<text class="mode-tag">{{ modeHintText }}</text>
+				<view class="symbol-stage page-column">
+					<view v-if="currentMode == 'e'" class="e-optotype" :style="{ width: currentSizePx + 'px', height: currentSizePx + 'px', transform: 'rotate(' + currentDirection + 'deg)' }">
+						<view class="e-stem" :style="{ width: eStrokePx + 'px' }"></view>
+						<view class="e-bar e-bar-top" :style="{ height: eStrokePx + 'px' }"></view>
+						<view class="e-bar e-bar-middle" :style="{ height: eStrokePx + 'px' }"></view>
+						<view class="e-bar e-bar-bottom" :style="{ height: eStrokePx + 'px' }"></view>
+					</view>
+					<text v-else class="symbol-text" :style="{ fontSize: currentSizePx + 'px', lineHeight: Math.round(currentSizePx * 1.12) + 'px' }">{{ currentSymbol }}</text>
+				</view>
+				<text class="tap-hint">点击中间切换下一个测试内容</text>
+			</view>
+
+			<view class="tap-zone tap-zone-bottom page-column" hover-class="zone-hover" @click="decreaseLevel">
+				<view class="zone-pill button-row">
+					<text class="zone-pill-icon">－</text>
+					<text class="zone-pill-text">缩小一级</text>
+				</view>
+			</view>
+		</view>
+
+		<view class="footer-card page-column">
+			<text class="vision-value">当前视力值 {{ currentVisionLabel }}（{{ currentSnellenLabel }}）</text>
+			<text class="vision-meta">当前第 {{ currentRound }} / {{ trialsPerLevel }} 次 · 标准视标高度约 {{ currentSizeMmText }} mm</text>
+			<text class="vision-note">基于 3 米半尺寸 Snellen / Tumbling E 规则估算，逻辑像素按 160dpi 近似换算</text>
+		</view>
 	</view>
 </template>
 
 <script setup lang="uts">
-	const title = ref('Hello')
+	type TestMode = 'e' | 'number' | 'animal'
+
+	type VisionPreset = {
+		acuityLabel: string,
+		acuityValue: number,
+		snellenLabel: string,
+	}
+
+	type VisionLevel = {
+		acuityLabel: string,
+		acuityValue: number,
+		snellenLabel: string,
+		sizeMm: number,
+		sizePx: number,
+	}
+
+	const TEST_DISTANCE_METERS = 3
+	const LOGICAL_DPI = 160
+	const TRIALS_PER_LEVEL = 5
+	const PASS_THRESHOLD = 3
+
+	const eDirections: number[] = [0, 90, 180, 270]
+	const digits: string[] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+	const animalIcons: string[] = ['🐶', '🐱', '🐰', '🦊', '🐻', '🐼']
+
+	const levelPresets: VisionPreset[] = [
+		{ acuityLabel: '0.1', acuityValue: 0.1, snellenLabel: '6/60' },
+		{ acuityLabel: '0.15', acuityValue: 0.15, snellenLabel: '6/40' },
+		{ acuityLabel: '0.2', acuityValue: 0.2, snellenLabel: '6/30' },
+		{ acuityLabel: '0.3', acuityValue: 0.3, snellenLabel: '6/20' },
+		{ acuityLabel: '0.4', acuityValue: 0.4, snellenLabel: '6/15' },
+		{ acuityLabel: '0.5', acuityValue: 0.5, snellenLabel: '6/12' },
+		{ acuityLabel: '0.6', acuityValue: 0.6, snellenLabel: '6/10' },
+		{ acuityLabel: '0.8', acuityValue: 0.8, snellenLabel: '6/7.5' },
+		{ acuityLabel: '1.0', acuityValue: 1.0, snellenLabel: '6/6' },
+		{ acuityLabel: '1.2', acuityValue: 1.2, snellenLabel: '6/5' },
+	]
+
+	function buildVisionLevels(): VisionLevel[] {
+		const levels: VisionLevel[] = []
+		for (let i = 0; i < levelPresets.length; i++) {
+			const preset = levelPresets[i]
+			const sizeMm = 1.454 * TEST_DISTANCE_METERS / preset.acuityValue
+			const sizePx = Math.round(sizeMm * LOGICAL_DPI / 25.4)
+			levels.push({
+				acuityLabel: preset.acuityLabel,
+				acuityValue: preset.acuityValue,
+				snellenLabel: preset.snellenLabel,
+				sizeMm,
+				sizePx,
+			})
+		}
+		return levels
+	}
+
+	function formatOneDecimal(value: number): string {
+		const rounded = Math.round(value * 10) / 10
+		return rounded.toFixed(1)
+	}
+
+	function pickDifferentIndex(length: number, previous: number): number {
+		if (length <= 1) {
+			return 0
+		}
+
+		let nextIndex = Math.floor(Math.random() * length)
+		if (nextIndex == previous) {
+			nextIndex = (nextIndex + 1 + Math.floor(Math.random() * (length - 1))) % length
+		}
+		return nextIndex
+	}
+
+	function modeLabel(mode: TestMode): string {
+		switch (mode) {
+			case 'e':
+				return 'E 方向'
+			case 'number':
+				return '数字'
+			default:
+				return '动物图标'
+		}
+	}
+
+	function modeHint(mode: TestMode): string {
+		switch (mode) {
+			case 'e':
+				return '随机朝向 E 视标，受测者口述上 / 下 / 左 / 右'
+			case 'number':
+				return '随机显示 0 - 9，适合会读数字的受测者'
+			default:
+				return '随机显示动物图标，适合儿童或不识字用户'
+		}
+	}
+
+	const visionLevels = buildVisionLevels()
+	const windowInfo = uni.getWindowInfo()
+	const statusBarHeight = ref(windowInfo.statusBarHeight)
+	const testDistanceText = ref(TEST_DISTANCE_METERS.toString())
+	const trialsPerLevel = ref(TRIALS_PER_LEVEL)
+	const passThreshold = ref(PASS_THRESHOLD)
+
+	const currentMode = ref('e' as TestMode)
+	const currentLevelIndex = ref(5)
+	const currentDirection = ref(0)
+	const currentSymbol = ref('8')
+	const currentRound = ref(1)
+
+	let lastDirectionIndex = -1
+	let lastDigitIndex = -1
+	let lastAnimalIndex = -1
+
+	const currentLevel = computed((): VisionLevel => {
+		return visionLevels[currentLevelIndex.value]
+	})
+
+	const currentSizePx = computed((): number => {
+		return currentLevel.value.sizePx
+	})
+
+	const currentVisionLabel = computed((): string => {
+		return currentLevel.value.acuityLabel
+	})
+
+	const currentSnellenLabel = computed((): string => {
+		return currentLevel.value.snellenLabel
+	})
+
+	const currentSizeMmText = computed((): string => {
+		return formatOneDecimal(currentLevel.value.sizeMm)
+	})
+
+	const eStrokePx = computed((): number => {
+		return Math.max(8, Math.round(currentLevel.value.sizePx / 5))
+	})
+
+	const currentModeLabel = computed((): string => {
+		return modeLabel(currentMode.value)
+	})
+
+	const modeHintText = computed((): string => {
+		return modeHint(currentMode.value)
+	})
+
+	function refreshOptotype(): void {
+		if (currentMode.value == 'e') {
+			const directionIndex = pickDifferentIndex(eDirections.length, lastDirectionIndex)
+			lastDirectionIndex = directionIndex
+			currentDirection.value = eDirections[directionIndex]
+			currentSymbol.value = 'E'
+			return
+		}
+
+		if (currentMode.value == 'number') {
+			const digitIndex = pickDifferentIndex(digits.length, lastDigitIndex)
+			lastDigitIndex = digitIndex
+			currentDirection.value = 0
+			currentSymbol.value = digits[digitIndex]
+			return
+		}
+
+		const animalIndex = pickDifferentIndex(animalIcons.length, lastAnimalIndex)
+		lastAnimalIndex = animalIndex
+		currentDirection.value = 0
+		currentSymbol.value = animalIcons[animalIndex]
+	}
+
+	function nextOptotype(): void {
+		if (currentRound.value < TRIALS_PER_LEVEL) {
+			currentRound.value = currentRound.value + 1
+		} else {
+			currentRound.value = 1
+		}
+		refreshOptotype()
+	}
+
+	function increaseLevel(): void {
+		if (currentLevelIndex.value > 0) {
+			currentLevelIndex.value = currentLevelIndex.value - 1
+			currentRound.value = 1
+			refreshOptotype()
+			return
+		}
+
+		uni.showToast({
+			title: '已经是最大视标',
+			icon: 'none',
+		})
+	}
+
+	function decreaseLevel(): void {
+		if (currentLevelIndex.value < visionLevels.length - 1) {
+			currentLevelIndex.value = currentLevelIndex.value + 1
+			currentRound.value = 1
+			refreshOptotype()
+			return
+		}
+
+		uni.showToast({
+			title: '已经是最小视标',
+			icon: 'none',
+		})
+	}
+
+	function openModeSettings(): void {
+		uni.showActionSheet({
+			title: '选择测试符号',
+			itemList: ['E 方向', '数字 0 - 9', '动物图标'],
+			success: (res) => {
+				if (res.tapIndex == 0) {
+					currentMode.value = 'e'
+				} else if (res.tapIndex == 1) {
+					currentMode.value = 'number'
+				} else {
+					currentMode.value = 'animal'
+				}
+				currentRound.value = 1
+				refreshOptotype()
+			}
+		})
+	}
+
+	onLoad(() => {
+		refreshOptotype()
+	})
 </script>
 
 <style>
-	.logo {
-		height: 100px;
-		width: 100px;
-		margin: 100px auto 25px auto;
+	.page {
+		flex: 1;
+		flex-direction: column;
+		padding-left: 18px;
+		padding-right: 18px;
+		padding-bottom: 18px;
+		background-color: #f4efe6;
+		background-image: linear-gradient(to bottom, #fff5df, #f2ede6, #dde6ef);
 	}
 
-	.title {
-		font-size: 18px;
-		color: #8f8f94;
+	.page-column {
+		flex-direction: column;
+	}
+
+	.page-row {
+		flex-direction: row;
+	}
+
+	.button-row {
+		flex-direction: row;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.top-shell {
+		flex-direction: column;
+		padding-top: 10px;
+	}
+
+	.top-bar {
+		flex-direction: row;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.top-copy {
+		flex-direction: column;
+	}
+
+	.eyebrow {
+		font-size: 12px;
+		letter-spacing: 1px;
+		color: #6d6250;
+	}
+
+	.headline {
+		margin-top: 4px;
+		font-size: 28px;
+		font-weight: 700;
+		color: #1b2a35;
+	}
+
+	.setting-button {
+		flex-direction: row;
+		padding-top: 10px;
+		padding-right: 14px;
+		padding-bottom: 10px;
+		padding-left: 14px;
+		border-radius: 999px;
+		background-color: rgba(27, 42, 53, 0.92);
+	}
+
+	.button-hover {
+		opacity: 0.84;
+	}
+
+	.setting-icon {
+		margin-right: 6px;
+		font-size: 16px;
+		color: #fff7eb;
+	}
+
+	.setting-text {
+		font-size: 14px;
+		color: #fff7eb;
+	}
+
+	.instruction-card {
+		flex-direction: column;
+		margin-top: 14px;
+		padding-top: 14px;
+		padding-right: 16px;
+		padding-bottom: 14px;
+		padding-left: 16px;
+		border-radius: 18px;
+		background-color: rgba(255, 250, 243, 0.86);
+	}
+
+	.instruction-line {
+		font-size: 13px;
+		color: #4b4132;
+	}
+
+	.instruction-subline {
+		margin-top: 6px;
+		font-size: 12px;
+		color: #7a7062;
+	}
+
+	.stage-shell {
+		flex: 1;
+		flex-direction: column;
+		justify-content: space-between;
+		padding-top: 12px;
+		padding-bottom: 12px;
+	}
+
+	.tap-zone {
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		height: 68px;
+	}
+
+	.zone-hover {
+		opacity: 0.76;
+	}
+
+	.zone-pill {
+		flex-direction: row;
+		padding-top: 8px;
+		padding-right: 14px;
+		padding-bottom: 8px;
+		padding-left: 14px;
+		border-radius: 999px;
+		background-color: rgba(255, 255, 255, 0.72);
+	}
+
+	.zone-pill-icon {
+		margin-right: 8px;
+		font-size: 16px;
+		color: #355061;
+	}
+
+	.zone-pill-text {
+		font-size: 13px;
+		color: #355061;
+	}
+
+	.symbol-panel {
+		flex: 1;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding-top: 16px;
+		padding-right: 16px;
+		padding-bottom: 16px;
+		padding-left: 16px;
+		border-radius: 28px;
+		background-color: rgba(255, 252, 246, 0.92);
+		box-shadow: 0 22px 60px rgba(45, 56, 65, 0.12);
+	}
+
+	.mode-tag {
+		font-size: 12px;
+		color: #7a6a58;
 		text-align: center;
+	}
+
+	.symbol-stage {
+		flex: 1;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+	}
+
+	.symbol-text {
+		font-weight: 700;
+		color: #111111;
+		text-align: center;
+	}
+
+	.e-optotype {
+		position: relative;
+	}
+
+	.e-stem {
+		position: absolute;
+		left: 0;
+		top: 0;
+		height: 100%;
+		background-color: #111111;
+	}
+
+	.e-bar {
+		position: absolute;
+		left: 0;
+		width: 100%;
+		background-color: #111111;
+	}
+
+	.e-bar-top {
+		top: 0;
+	}
+
+	.e-bar-middle {
+		top: 40%;
+	}
+
+	.e-bar-bottom {
+		bottom: 0;
+	}
+
+	.tap-hint {
+		margin-top: 14px;
+		font-size: 13px;
+		color: #2f6174;
+	}
+
+	.footer-card {
+		flex-direction: column;
+		padding-top: 16px;
+		padding-right: 18px;
+		padding-bottom: 16px;
+		padding-left: 18px;
+		border-radius: 20px;
+		background-color: rgba(22, 35, 44, 0.94);
+	}
+
+	.vision-value {
+		font-size: 18px;
+		font-weight: 700;
+		color: #fff7ea;
+	}
+
+	.vision-meta {
+		margin-top: 8px;
+		font-size: 13px;
+		color: rgba(255, 247, 234, 0.88);
+	}
+
+	.vision-note {
+		margin-top: 6px;
+		font-size: 11px;
+		color: rgba(255, 247, 234, 0.68);
 	}
 </style>
