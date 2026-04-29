@@ -34,6 +34,10 @@
 						<view class="e-bar e-bar-middle" :style="{ height: eStrokePx + 'px' }"></view>
 						<view class="e-bar e-bar-bottom" :style="{ height: eStrokePx + 'px' }"></view>
 					</view>
+					<view v-else-if="currentMode == 'image'" class="symbol-image-box page-column">
+						<image v-if="currentImagePath.length > 0" class="symbol-image" :style="{ width: currentSizePx + 'px', height: currentSizePx + 'px' }" :src="currentImagePath" mode="aspectFit"></image>
+						<text v-else class="empty-image-text">请先在设置里选择测试图片</text>
+					</view>
 					<text v-else class="symbol-text" :style="{ fontSize: currentSizePx + 'px', lineHeight: Math.round(currentSizePx * 1.12) + 'px' }">{{ currentSymbol }}</text>
 				</view>
 				<text class="tap-hint">点击中间切换下一个测试内容</text>
@@ -104,11 +108,42 @@
 				</view>
 			</view>
 		</view>
+
+		<view v-if="isImageManagerVisible" class="calibration-mask page-column">
+			<view class="calibration-panel page-column">
+				<text class="calibration-title">自定义测试图片</text>
+				<text class="calibration-copy">从相册多选图片后，图片模式会随机显示这些图片。</text>
+				<text class="calibration-copy">当前已保存 {{ selectedImagePaths.length }} 张图片。</text>
+
+				<scroll-view class="image-scroll" direction="horizontal">
+					<view class="image-scroll-inner page-row">
+						<view v-for="(imagePath, index) in selectedImagePaths" :key="index" class="image-thumb-card page-column">
+							<image class="image-thumb" :src="imagePath" mode="aspectFill"></image>
+						</view>
+						<view v-if="selectedImagePaths.length == 0" class="image-empty-card page-column">
+							<text class="image-empty-text">还没有选择图片</text>
+						</view>
+					</view>
+				</scroll-view>
+
+				<view class="image-action-stack page-column">
+					<view class="image-action-button calibration-button-dark button-row" hover-class="button-hover" @click="pickTestImages">
+						<text class="calibration-button-text-dark">从相册选择图片</text>
+					</view>
+					<view class="image-action-button calibration-button-light button-row" hover-class="button-hover" @click="clearTestImages">
+						<text class="calibration-button-text-light">清空图片</text>
+					</view>
+					<view class="image-action-button calibration-button-light button-row" hover-class="button-hover" @click="closeImageManager">
+						<text class="calibration-button-text-light">关闭</text>
+					</view>
+				</view>
+			</view>
+		</view>
 	</view>
 </template>
 
 <script setup lang="uts">
-	type TestMode = 'e' | 'number' | 'animal'
+	type TestMode = 'e' | 'number' | 'image'
 
 	type VisionPreset = {
 		acuityLabel: string,
@@ -130,11 +165,11 @@
 	const PASS_THRESHOLD = 3
 	const CALIBRATION_STORAGE_KEY = 'vision_test_calibration_scale'
 	const NUMBER_CHAR_STORAGE_KEY = 'vision_test_number_chars'
+	const IMAGE_PATHS_STORAGE_KEY = 'vision_test_image_paths'
 	const ONE_CENTIMETER_MM = 10
 	const DEFAULT_NUMBER_CHAR_TEXT = '0123456789'
 
 	const eDirections: number[] = [0, 90, 180, 270]
-	const animalIcons: string[] = ['🐶', '🐱', '🐰', '🦊', '🐻', '🐼']
 
 	const levelPresets: VisionPreset[] = [
 		{ acuityLabel: '0.1', acuityValue: 0.1, snellenLabel: '6/60' },
@@ -227,7 +262,7 @@
 			case 'number':
 				return '自定义字符'
 			default:
-				return '动物图标'
+				return '自定义图片'
 		}
 	}
 
@@ -249,10 +284,13 @@
 	const numberChars = ref(buildDefaultNumberChars() as string[])
 	const characterInputText = ref(DEFAULT_NUMBER_CHAR_TEXT)
 	const isCharacterEditorVisible = ref(false)
+	const selectedImagePaths = ref([] as string[])
+	const currentImagePath = ref('')
+	const isImageManagerVisible = ref(false)
 
 	let lastDirectionIndex = -1
 	let lastDigitIndex = -1
-	let lastAnimalIndex = -1
+	let lastImageIndex = -1
 
 	const currentLevel = computed((): VisionLevel => {
 		return visionLevels[currentLevelIndex.value]
@@ -289,7 +327,7 @@
 			case 'number':
 				return '随机显示已配置字符，当前共 ' + numberChars.value.length + ' 个'
 			default:
-				return '随机显示动物图标，适合儿童或不识字用户'
+				return selectedImagePaths.value.length > 0 ? '随机显示已选择图片，当前共 ' + selectedImagePaths.value.length + ' 张' : '请先在设置中从相册选择测试图片'
 		}
 	})
 
@@ -332,6 +370,17 @@
 		characterInputText.value = DEFAULT_NUMBER_CHAR_TEXT
 	}
 
+	function loadSavedImages(): void {
+		const storedValue = uni.getStorageSync(IMAGE_PATHS_STORAGE_KEY)
+		if (storedValue != null) {
+			const storedList = storedValue as string[]
+			if (storedList.length > 0) {
+				selectedImagePaths.value = storedList
+				currentImagePath.value = storedList[0]
+			}
+		}
+	}
+
 	function refreshOptotype(): void {
 		if (currentMode.value == 'e') {
 			const directionIndex = pickDifferentIndex(eDirections.length, lastDirectionIndex)
@@ -349,10 +398,18 @@
 			return
 		}
 
-		const animalIndex = pickDifferentIndex(animalIcons.length, lastAnimalIndex)
-		lastAnimalIndex = animalIndex
+		if (selectedImagePaths.value.length > 0) {
+			const imageIndex = pickDifferentIndex(selectedImagePaths.value.length, lastImageIndex)
+			lastImageIndex = imageIndex
+			currentDirection.value = 0
+			currentImagePath.value = selectedImagePaths.value[imageIndex]
+			currentSymbol.value = ''
+			return
+		}
+
 		currentDirection.value = 0
-		currentSymbol.value = animalIcons[animalIndex]
+		currentImagePath.value = ''
+		currentSymbol.value = '请先选择图片'
 	}
 
 	function nextOptotype(): void {
@@ -449,6 +506,91 @@
 		})
 	}
 
+	function openImageManager(): void {
+		isImageManagerVisible.value = true
+	}
+
+	function closeImageManager(): void {
+		isImageManagerVisible.value = false
+	}
+
+	function persistPickedImages(tempFilePaths: string[]): void {
+		if (tempFilePaths.length == 0) {
+			return
+		}
+
+		const fileManager = uni.getFileSystemManager()
+		const savedPaths = [] as string[]
+		let completed = 0
+		let successCount = 0
+
+		for (let i = 0; i < tempFilePaths.length; i++) {
+			const saveOptions: SaveFileOptions = {
+				tempFilePath: tempFilePaths[i],
+				success: (res) => {
+					savedPaths.push(res.savedFilePath)
+					successCount = successCount + 1
+				},
+				complete: (_) => {
+					completed = completed + 1
+					if (completed == tempFilePaths.length) {
+						if (successCount > 0) {
+							selectedImagePaths.value = savedPaths
+							currentImagePath.value = savedPaths[0]
+							uni.setStorageSync(IMAGE_PATHS_STORAGE_KEY, savedPaths)
+							lastImageIndex = -1
+							if (currentMode.value == 'image') {
+								currentRound.value = 1
+								refreshOptotype()
+							}
+							uni.showToast({
+								title: '已保存 ' + successCount + ' 张图片',
+								icon: 'none',
+							})
+							return
+						}
+
+						uni.showToast({
+							title: '图片保存失败',
+							icon: 'none',
+						})
+					}
+				}
+			}
+			fileManager.saveFile(saveOptions)
+		}
+	}
+
+	function pickTestImages(): void {
+		uni.chooseImage({
+			sourceType: ['album'],
+			count: 9,
+			success: (res) => {
+				persistPickedImages(res.tempFilePaths)
+			},
+			fail: (err) => {
+				uni.showToast({
+					title: err.errMsg,
+					icon: 'none',
+				})
+			}
+		})
+	}
+
+	function clearTestImages(): void {
+		selectedImagePaths.value = []
+		currentImagePath.value = ''
+		uni.setStorageSync(IMAGE_PATHS_STORAGE_KEY, [] as string[])
+		lastImageIndex = -1
+		if (currentMode.value == 'image') {
+			refreshOptotype()
+		}
+		uni.showToast({
+			title: '已清空测试图片',
+			icon: 'none',
+		})
+	}
+
 	function saveCalibration(): void {
 		const nextScale = calibrationWidthPx.value / baseOneCentimeterPx
 		calibrationScale.value = nextScale
@@ -473,7 +615,7 @@
 	function openModeSettings(): void {
 		uni.showActionSheet({
 			title: '设置',
-			itemList: ['使用 E 方向', '使用自定义字符', '编辑字符集', '使用动物图标', '标准尺寸校验', '恢复默认尺寸'],
+			itemList: ['使用 E 方向', '使用自定义字符', '编辑字符集', '使用自定义图片', '管理测试图片', '标准尺寸校验', '恢复默认尺寸'],
 			success: (res) => {
 				if (res.tapIndex == 0) {
 					currentMode.value = 'e'
@@ -483,8 +625,19 @@
 					openCharacterEditor()
 					return
 				} else if (res.tapIndex == 3) {
-					currentMode.value = 'animal'
+					currentMode.value = 'image'
+					if (selectedImagePaths.value.length == 0) {
+						openImageManager()
+						uni.showToast({
+							title: '请先从相册选择图片',
+							icon: 'none',
+						})
+						return
+					}
 				} else if (res.tapIndex == 4) {
+					openImageManager()
+					return
+				} else if (res.tapIndex == 5) {
 					openCalibrationPanel()
 					return
 				} else {
@@ -500,6 +653,7 @@
 	onLoad(() => {
 		loadCalibration()
 		loadNumberChars()
+		loadSavedImages()
 		refreshOptotype()
 	})
 </script>
@@ -675,6 +829,25 @@
 	.symbol-text {
 		font-weight: 700;
 		color: #111111;
+		text-align: center;
+	}
+
+	.symbol-image-box {
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+	}
+
+	.symbol-image {
+		border-radius: 24px;
+		background-color: #ffffff;
+	}
+
+	.empty-image-text {
+		font-size: 20px;
+		font-weight: 700;
+		color: #6c6255;
 		text-align: center;
 	}
 
@@ -888,6 +1061,63 @@
 
 	.character-small-button {
 		width: 31%;
+		flex-direction: row;
+		padding-top: 12px;
+		padding-bottom: 12px;
+		border-radius: 999px;
+	}
+
+	.image-scroll {
+		margin-top: 20px;
+		height: 110px;
+	}
+
+	.image-scroll-inner {
+		flex-direction: row;
+		align-items: center;
+	}
+
+	.image-thumb-card {
+		width: 92px;
+		height: 92px;
+		margin-right: 12px;
+		padding-top: 4px;
+		padding-right: 4px;
+		padding-bottom: 4px;
+		padding-left: 4px;
+		border-radius: 18px;
+		background-color: #ede7d7;
+	}
+
+	.image-thumb {
+		width: 84px;
+		height: 84px;
+		border-radius: 14px;
+	}
+
+	.image-empty-card {
+		width: 180px;
+		height: 92px;
+		margin-right: 12px;
+		border-radius: 18px;
+		align-items: center;
+		justify-content: center;
+		background-color: #f1ecdf;
+	}
+
+	.image-empty-text {
+		font-size: 14px;
+		color: #6f6657;
+	}
+
+	.image-action-stack {
+		margin-top: 18px;
+		flex-direction: column;
+	}
+
+	.image-action-button {
+		margin-top: 10px;
+		width: 100%;
 		flex-direction: row;
 		padding-top: 12px;
 		padding-bottom: 12px;
